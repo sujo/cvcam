@@ -158,7 +158,7 @@ main(int argc, char *argv[]) {
       gettimeofday(&tv, NULL);
       long sec2 = tv.tv_sec;
       if (sec2 > sec) {
-         std::cout << "FPS: " << frames << "\n";
+         std::cout << "\rFPS: " << frames << "              " << std::flush;
          frames = 0;
          sec = sec2;
          if (learningSecs > 0) {
