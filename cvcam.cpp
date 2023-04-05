@@ -53,8 +53,10 @@ main(int argc, char *argv[]) {
       return 3;
    }
 
+   //cam.set(CAP_PROP_POS_FRAMES, 0); // Set index to 0 (start frame, just in case it is a file)
    cam.set(CAP_PROP_FRAME_WIDTH, VID_WIDTH);
    cam.set(CAP_PROP_FRAME_HEIGHT, VID_HEIGHT);
+   cam.set(CAP_PROP_AUTO_WB, false);
 
    // open output device
    std::cout << "Opening output stream: " << outputFile << "\n";
