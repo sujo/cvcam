@@ -93,7 +93,18 @@ main(int argc, char *argv[]) {
    }
 
    // prepare virtual background
-   Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}};
+   Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}}; // green background
+   std::string imageFile = params.get<String>("image");
+   if (imageFile.size()) {
+      std::cerr << "Loading image: " << imageFile << "\n";
+      Size size = bgImage.size();
+      bgImage = imread(imageFile);
+      if (bgImage.empty()) {
+         std::cerr << "Unable to read image from " << imageFile << "\n";
+         return 10;
+      }
+      resize(bgImage, bgImage, size, 0, 0, INTER_LINEAR);
+   }
 
 
    Ptr<BackgroundSubtractor> pBackSub = createBackgroundSubtractorMOG2(1, 16, true);
