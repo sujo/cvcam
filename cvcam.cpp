@@ -98,7 +98,7 @@ main(int argc, char *argv[]) {
 
    double learningRate = 0.2;
    unsigned long learningSecs = params.get<unsigned long>("learningSecs");
-   while (true) {
+   for (int key = 0; key != 27 /* ESC */; key = waitKey(10)) {
       Mat frame;
       cam >> frame;
       if (frame.empty()) {
