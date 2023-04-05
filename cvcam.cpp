@@ -11,7 +11,11 @@
 
 #define VID_WIDTH  640
 #define VID_HEIGHT 480
-#define VIDEO_OUT  "/dev/video6"
+
+
+void printSize(const std::string &name, const cv::Mat &m) {
+   std::cout << name << " size: " << m.cols << "*" << m.rows << "*" << m.elemSize() << " type " << m.type() << "\n";
+}
 
 int
 main(int argc, char *argv[]) {
@@ -66,6 +70,7 @@ main(int argc, char *argv[]) {
       return 4;
    }
 
+   size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
    struct v4l2_format vid_format;
    memset(&vid_format, 0, sizeof(vid_format));
    vid_format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
@@ -76,7 +81,6 @@ main(int argc, char *argv[]) {
    }
 
    // configure desired video format on device
-   size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
    vid_format.fmt.pix.width = cam.get(CAP_PROP_FRAME_WIDTH);
    vid_format.fmt.pix.height = cam.get(CAP_PROP_FRAME_HEIGHT);
    vid_format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
@@ -88,9 +92,13 @@ main(int argc, char *argv[]) {
       return 6;
    }
 
-   Ptr<BackgroundSubtractor> pBackSub = createBackgroundSubtractorMOG2();
+   // prepare virtual background
+   Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}};
 
+
+   Ptr<BackgroundSubtractor> pBackSub = createBackgroundSubtractorMOG2(1, 16, true);
    Mat mask;
+
    struct timeval tv{0, 0};
    gettimeofday(&tv, NULL);
    long sec = tv.tv_sec;
@@ -107,10 +115,27 @@ main(int argc, char *argv[]) {
       }
       ++frames;
 
+      /*
+      if (frame.size() != bgImage.size()) {
+         resize(frame, frame, bgImage.size(), 0, 0, INTER_LINEAR);
+      }
+      */
+
       pBackSub->apply(frame, mask, learningRate);
 
+      //printSize("frame    ", frame);
+      //printSize("mask     ", mask);
+
+      Mat bwMask;
+      threshold(mask, bwMask, 204, 255, THRESH_BINARY);
+
+      //printSize("bwMask   ", bwMask);
+      //printSize("bgImage  ", bgImage);
+
       Mat outFrame;
-      outFrame = mask;
+      bgImage.copyTo(outFrame);
+      copyTo(frame,   outFrame, bwMask);
+      imshow("outFrame", outFrame);
 
       size_t written = write(output, outFrame.data, framesize);
       if (written < 0) {
