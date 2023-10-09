@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string>
+#include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -12,6 +13,16 @@
 #define VID_WIDTH  640
 #define VID_HEIGHT 480
 
+float g_a1, g_a2;
+
+/*
+void mouseCallback(int ev, int x, int y, int flags, void* userdata)
+{
+   g_a1 = x/50.0;
+   g_a2 = y/50.0;
+   std::cout << "a1=" << g_a1 << ", a2=" << g_a2 << "\n";
+}
+*/
 
 void printSize(const std::string &name, const cv::Mat &m) {
    std::cout << name << " size: " << m.cols << "*" << m.rows << "*" << m.elemSize() << " type " << m.type() << "\n";
@@ -24,10 +35,11 @@ main(int argc, char *argv[]) {
 
    const char* param_spec =
       "{ help h         |             | Print usage }"
-      "{ input          | /dev/video0 | Video device for primary video stream input }"
-      "{ output         | /dev/video5 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
-      "{ image          |             | Image that replaces the background removed from the input stream }"
-      "{ learningSecs   | 5           | Number of seconds learning the background }"
+      "{ input          | /dev/video1 | Video device for primary video stream input }"
+      "{ output         | /dev/video6 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
+      "{ image          | /home/spike/myicarus.jpg            | Image that replaces the background removed from the input stream }"
+      "{ rb             | 3.0         | weight for blue-green difference on alpha }"
+      "{ g              | 5.5         | blue-green difference scale }"
       ;
 
    CommandLineParser params{argc, argv, param_spec};
@@ -38,63 +50,42 @@ main(int argc, char *argv[]) {
       return 0;
    }
 
-   std::string inputFile = params.get<String>("input");
+   const std::string inputFile = params.get<String>("input");
    if (inputFile.size() == 0) {
       std::cerr << "Missing parameter: input device\n";
       return 1;
    }
 
-   std::string outputFile = params.get<String>("output");
+   const std::string outputFile = params.get<String>("output");
    if (outputFile.size() == 0) {
       std::cerr << "Missing parameter: output device\n";
       return 2;
    }
 
-   std::cout << "Opening input stream: " << inputFile << "\n";
-   VideoCapture cam(inputFile.c_str());
+   g_a1 = params.get<float>("rb");
+   g_a2 = params.get<float>("g");
+
+   std::cout << "Opening input device: " << inputFile << "\n";
+   VideoCapture cam("v4l2src device=" + inputFile + " ! video/x-raw,format=YUY2,width=640,height=480 ! videoconvert ! appsink");
+   //VideoCapture cam(1);
    if (!cam.isOpened()) {
       std::cerr << "ERROR: Could not open input stream " << inputFile << ".\n";
       return 3;
    }
 
-   //cam.set(CAP_PROP_POS_FRAMES, 0); // Set index to 0 (start frame, just in case it is a file)
-   cam.set(CAP_PROP_FRAME_WIDTH, VID_WIDTH);
-   cam.set(CAP_PROP_FRAME_HEIGHT, VID_HEIGHT);
-   cam.set(CAP_PROP_AUTO_WB, false);
+   Size sz = Size(VID_WIDTH, VID_HEIGHT);
 
    // open output device
-   std::cout << "Opening output stream: " << outputFile << "\n";
-   int output = open(outputFile.c_str(), O_RDWR);
-   if(output < 0) {
+   std::cout << "Opening output device: " << outputFile << "\n";
+   VideoWriter output("appsrc ! videoconvert ! v4l2sink device=" + outputFile, CAP_GSTREAMER, 30, sz);
+   if(!output.isOpened()) {
       std::cerr << "ERROR: Could not open output stream " << outputFile << ": " << strerror(errno) << "\n";
       return 4;
    }
 
-   size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
-   struct v4l2_format vid_format;
-   memset(&vid_format, 0, sizeof(vid_format));
-   vid_format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-
-   if (ioctl(output, VIDIOC_G_FMT, &vid_format) < 0) {
-      std::cerr << "ERROR: Unable to get video format: " << strerror(errno) << "\n";
-      return 5;
-   }
-
-   // configure desired video format on device
-   vid_format.fmt.pix.width = cam.get(CAP_PROP_FRAME_WIDTH);
-   vid_format.fmt.pix.height = cam.get(CAP_PROP_FRAME_HEIGHT);
-   vid_format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-   vid_format.fmt.pix.sizeimage = framesize;
-   vid_format.fmt.pix.field = V4L2_FIELD_NONE;
-
-   if (ioctl(output, VIDIOC_S_FMT, &vid_format) < 0) {
-      std::cerr << "ERROR: Unable to set video format: " << strerror(errno) << "\n";
-      return 6;
-   }
-
    // prepare virtual background
    Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}}; // green background
-   std::string imageFile = params.get<String>("image");
+   const std::string imageFile = params.get<String>("image");
    if (imageFile.size()) {
       std::cerr << "Loading image: " << imageFile << "\n";
       Size size = bgImage.size();
@@ -105,18 +96,25 @@ main(int argc, char *argv[]) {
       }
       resize(bgImage, bgImage, size, 0, 0, INTER_LINEAR);
    }
+   std::vector<Mat> frameChannels, bgImageChannels0, bgImageChannels;
 
+   bgImage.convertTo(bgImage, CV_32FC3, 1.0/255);
+   split(bgImage, bgImageChannels0);
+   split(bgImage, bgImageChannels);
 
-   Ptr<BackgroundSubtractor> pBackSub = createBackgroundSubtractorMOG2(1, 16, true);
-   Mat mask;
+   Mat src, front, back;
+   Mat alpha = Mat::zeros(sz, CV_32F);
 
    struct timeval tv{0, 0};
    gettimeofday(&tv, NULL);
    long sec = tv.tv_sec;
    unsigned long frames = 0;
 
-   double learningRate = 0.2;
-   unsigned long learningSecs = params.get<unsigned long>("learningSecs");
+   /*
+   namedWindow("cvcam");
+   setMouseCallback("cvcam", mouseCallback);
+   */
+
    for (int key = 0; key != 27 /* ESC */; key = waitKey(10)) {
       Mat frame;
       cam >> frame;
@@ -126,34 +124,27 @@ main(int argc, char *argv[]) {
       }
       ++frames;
 
-      /*
-      if (frame.size() != bgImage.size()) {
-         resize(frame, frame, bgImage.size(), 0, 0, INTER_LINEAR);
+      frame.convertTo(frame, CV_32F, 1.0/255);
+      split(frame, frameChannels);
+
+      //alpha = Scalar::all(1.0) - g_a1 * (frameChannels[1] - g_a2 * frameChannels[0]);
+      alpha = 1 + g_a1 * (frameChannels[0] + frameChannels[2]) - g_a2 * frameChannels[1];
+      threshold(alpha, alpha, 1, 1, THRESH_TRUNC);
+      threshold(alpha, alpha, 0, 0, THRESH_TOZERO);
+
+      //blendLinear(frame, bgImage, alpha, 1 - alpha, frame);
+      for (int i=0; i < 3; ++i) {
+         multiply(alpha, frameChannels[i], frameChannels[i]);
+         multiply(Scalar::all(1.0) - alpha, bgImageChannels0[i], bgImageChannels[i]);  
       }
-      */
+      merge(frameChannels, front);
+      merge(bgImageChannels, back);
+      frame = front + back;
+      frame.convertTo(frame, CV_8UC3, 255);
 
-      pBackSub->apply(frame, mask, learningRate);
+      //imshow("cvcam", frame);
 
-      //printSize("frame    ", frame);
-      //printSize("mask     ", mask);
-
-      Mat bwMask;
-      threshold(mask, bwMask, 204, 255, THRESH_BINARY);
-
-      //printSize("bwMask   ", bwMask);
-      //printSize("bgImage  ", bgImage);
-
-      Mat outFrame;
-      bgImage.copyTo(outFrame);
-      copyTo(frame,   outFrame, bwMask);
-      imshow("outFrame", outFrame);
-
-      size_t written = write(output, outFrame.data, framesize);
-      if (written < 0) {
-         close(output);
-         std::cerr << "ERROR: Could not write to output device: " << strerror(errno) << "\n";
-         return 7;
-      }
+      output << frame;
 
       gettimeofday(&tv, NULL);
       long sec2 = tv.tv_sec;
@@ -161,11 +152,6 @@ main(int argc, char *argv[]) {
          std::cout << "\rFPS: " << frames << "              " << std::flush;
          frames = 0;
          sec = sec2;
-         if (learningSecs > 0) {
-            --learningSecs;
-         } else {
-            learningRate = 0.0;
-         }
       }
    } // main loop
 
