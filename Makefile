@@ -1,5 +1,5 @@
 CXXFLAGS   = `pkg-config --cflags opencv4` -g3
-LDLIBS     = `pkg-config --libs opencv4`
+LDLIBS     = `pkg-config --libs opencv4` -lv4l2
 
 TARGETS=cvcam
 
