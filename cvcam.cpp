@@ -11,19 +11,21 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utility.hpp> // CommandLineParser
 
-#define VID_WIDTH  640
-#define VID_HEIGHT 480
+#define VID_WIDTH  1920
+#define VID_HEIGHT 1080
 
 float g_a1, g_a2;
 
-/*
+//#define CALIBRATE
+
+#ifdef CALIBRATE
 void mouseCallback(int ev, int x, int y, int flags, void* userdata)
 {
    g_a1 = x/50.0;
    g_a2 = y/50.0;
    std::cout << "a1=" << g_a1 << ", a2=" << g_a2 << "\n";
 }
-*/
+#endif
 
 void printSize(const std::string &name, const cv::Mat &m) {
    std::cout << name << " size: " << m.cols << "*" << m.rows << "*" << m.elemSize() << " type " << m.type() << "\n";
@@ -39,8 +41,8 @@ main(int argc, char *argv[]) {
       "{ input          | /dev/video0 | Video device for primary video stream input }"
       "{ output         | /dev/video6 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
       "{ image          | your-file   | Image that replaces the background removed from the input stream }"
-      "{ rb             | 2.4         | weight for blue-green difference on alpha }"
-      "{ g              | 4.5         | blue-green difference scale }"
+      "{ rb             | 4.0         | weight for blue-green difference on alpha }"
+      "{ g              | 6.2         | blue-green difference scale }"
       ;
 
    CommandLineParser params{argc, argv, param_spec};
@@ -67,7 +69,7 @@ main(int argc, char *argv[]) {
    g_a2 = params.get<float>("g");
 
    std::cout << "Opening input device: " << inputFile << "\n";
-   VideoCapture cam("v4l2src device=" + inputFile + " ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1 ! videoconvert ! appsink");
+   VideoCapture cam("v4l2src device=" + inputFile + " ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! videoconvert ! appsink");
    //VideoCapture cam(1);
    if (!cam.isOpened()) {
       std::cerr << "ERROR: Could not open input stream " << inputFile << ".\n";
@@ -143,10 +145,10 @@ main(int argc, char *argv[]) {
    long sec = tv.tv_sec;
    unsigned long frames = 0;
 
-   /*
+#ifdef CALIBRATE
    namedWindow("cvcam");
    setMouseCallback("cvcam", mouseCallback);
-   */
+#endif
 
    for (int key = 0; key != 27 /* ESC */; key = waitKey(10)) {
       Mat frame;
@@ -164,6 +166,7 @@ main(int argc, char *argv[]) {
       alpha = 1.0 + g_a1 * (frameChannels[0] + frameChannels[2]) - g_a2 * frameChannels[1];
       threshold(alpha, alpha, 1, 1, THRESH_TRUNC);
       threshold(alpha, alpha, 0, 0, THRESH_TOZERO);
+      multiply(alpha, alpha, alpha);
 
       for (int i=0; i < 3; ++i) {
          multiply(alpha, frameChannels[i], frameChannels[i]);
