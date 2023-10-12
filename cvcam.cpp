@@ -11,8 +11,8 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utility.hpp> // CommandLineParser
 
-#define VID_WIDTH  1920
-#define VID_HEIGHT 1080
+#define VID_WIDTH  1280
+#define VID_HEIGHT 720
 
 float g_a1, g_a2;
 
@@ -69,25 +69,18 @@ main(int argc, char *argv[]) {
    g_a2 = params.get<float>("g");
 
    std::cout << "Opening input device: " << inputFile << "\n";
-   VideoCapture cam("v4l2src device=" + inputFile + " ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=30/1 ! videoconvert ! appsink");
-   //VideoCapture cam(1);
+   VideoCapture cam(inputFile);
    if (!cam.isOpened()) {
       std::cerr << "ERROR: Could not open input stream " << inputFile << ".\n";
       return 3;
    }
-   //cam.set(CAP_PROP_AUTO_WB, false);
+   cam.set(CAP_PROP_FRAME_WIDTH, VID_WIDTH);
+   cam.set(CAP_PROP_FRAME_HEIGHT, VID_HEIGHT);
+   cam.set(CAP_PROP_AUTO_WB, false);
 
    Size sz = Size(VID_WIDTH, VID_HEIGHT);
 
    // open output device
-   /*
-   std::cout << "Opening output device: " << outputFile << "\n";
-   VideoWriter output("appsrc ! videoconvert ! image/jpeg,parsed=true,colorimetry=2:4:7:1,framerate=30/1,sof-marker=(int)0,width=640,height=480 ! v4l2sink device=" + outputFile, CAP_GSTREAMER, 30, sz);
-   if(!output.isOpened()) {
-      std::cerr << "ERROR: Could not open output stream " << outputFile << ": " << strerror(errno) << "\n";
-      return 4;
-   }
-   */
    std::cout << "Opening output stream: " << outputFile << "\n";
    int output = v4l2_open(outputFile.c_str(), O_WRONLY);
    if(output < 0) {
