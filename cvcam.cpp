@@ -3,13 +3,13 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 
 #include <linux/videodev2.h>
 #include <libv4l2.h>
 #include <opencv2/opencv.hpp>
-#include <opencv2/core/utility.hpp> // CommandLineParser
 
 #define VID_WIDTH  1280
 #define VID_HEIGHT 720
@@ -27,58 +27,70 @@ void mouseCallback(int ev, int x, int y, int flags, void* userdata)
 }
 #endif
 
-void printSize(const std::string &name, const cv::Mat &m) {
-   std::cout << name << " size: " << m.cols << "*" << m.rows << "*" << m.elemSize() << " type " << m.type() << "\n";
+
+int configure_device(int fd, v4l2_buf_type t)
+{
+   struct v4l2_format vid_format;
+   memset(&vid_format, 0, sizeof(vid_format));
+   vid_format.type = t;
+
+   if (v4l2_ioctl(fd, VIDIOC_G_FMT, &vid_format) < 0) {
+      std::cerr << "ERROR: Unable to get video format: " << strerror(errno) << "\n";
+      return 5;
+   }
+
+   vid_format.fmt.pix.width = VID_WIDTH; //cam.get(CAP_PROP_FRAME_WIDTH);
+   vid_format.fmt.pix.height = VID_HEIGHT; //cam.get(CAP_PROP_FRAME_HEIGHT);
+   vid_format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+   vid_format.fmt.pix.sizeimage = VID_WIDTH * VID_HEIGHT * 3;
+   vid_format.fmt.pix.field = V4L2_FIELD_NONE;
+   //cam.set(CAP_PROP_AUTO_WB, false);
+
+   if (v4l2_ioctl(fd, VIDIOC_S_FMT, &vid_format) < 0) {
+      std::cerr << "ERROR: Unable to set video format: " << strerror(errno) << "\n";
+      return 5;
+   }
+   return 0;
 }
+
 
 int
 main(int argc, char *argv[]) {
 
-   using namespace cv;
-
    const char* param_spec =
       "{ help h         |             | Print usage }"
-      "{ input          | /dev/video0 | Video device for primary video stream input }"
-      "{ output         | /dev/video6 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
-      "{ image          | your-file   | Image that replaces the background removed from the input stream }"
+      "{ input          | /dev/video1 | Video device for primary video stream input }"
+      "{ output         | /dev/video8 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
+      "{ image          | /home/spike/myicarus.jpg   | Image that replaces the background removed from the input stream }"
       "{ rb             | 4.0         | weight for blue-green difference on alpha }"
       "{ g              | 6.2         | blue-green difference scale }"
       ;
 
-   CommandLineParser params{argc, argv, param_spec};
-   params.about("This tool replaces the static background from a video stream with an image.\n");
+   const std::string imageFile = "/home/spike/myicarus.jpg";
 
-   if (params.has("help")) {
-      params.printMessage();
-      return 0;
-   }
-
-   const std::string inputFile = params.get<String>("input");
+   const std::string inputFile = "/dev/video1";
    if (inputFile.size() == 0) {
       std::cerr << "Missing parameter: input device\n";
       return 1;
    }
 
-   const std::string outputFile = params.get<String>("output");
+   const std::string outputFile = "/dev/video8";
    if (outputFile.size() == 0) {
       std::cerr << "Missing parameter: output device\n";
       return 2;
    }
 
-   g_a1 = params.get<float>("rb");
-   g_a2 = params.get<float>("g");
-
    std::cout << "Opening input device: " << inputFile << "\n";
-   VideoCapture cam(inputFile);
-   if (!cam.isOpened()) {
-      std::cerr << "ERROR: Could not open input stream " << inputFile << ".\n";
+   int input = v4l2_open(inputFile.c_str(), O_RDWR);
+   if(input < 0) {
+      std::cerr << "ERROR: Could not open input stream " << inputFile << ": " << strerror(errno) << "\n";
       return 3;
    }
-   cam.set(CAP_PROP_FRAME_WIDTH, VID_WIDTH);
-   cam.set(CAP_PROP_FRAME_HEIGHT, VID_HEIGHT);
-   cam.set(CAP_PROP_AUTO_WB, false);
 
-   Size sz = Size(VID_WIDTH, VID_HEIGHT);
+   int err = configure_device(input, V4L2_BUF_TYPE_VIDEO_CAPTURE);
+   if (err) {
+      return err;
+   }
 
    // open output device
    std::cout << "Opening output stream: " << outputFile << "\n";
@@ -88,92 +100,70 @@ main(int argc, char *argv[]) {
       return 4;
    }
 
-   size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
-   struct v4l2_format vid_format;
-   memset(&vid_format, 0, sizeof(vid_format));
-   vid_format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-
-   if (ioctl(output, VIDIOC_G_FMT, &vid_format) < 0) {
-      std::cerr << "ERROR: Unable to get video format: " << strerror(errno) << "\n";
-      return 5;
+   err = configure_device(output, V4L2_BUF_TYPE_VIDEO_OUTPUT);
+   if (err) {
+      return err;
    }
-
-   // configure desired video format on device
-   vid_format.fmt.pix.width = VID_WIDTH; //cam.get(CAP_PROP_FRAME_WIDTH);
-   vid_format.fmt.pix.height = VID_HEIGHT; //cam.get(CAP_PROP_FRAME_HEIGHT);
-   vid_format.fmt.pix.pixelformat = V4L2_PIX_FMT_BGR24;
-   vid_format.fmt.pix.sizeimage = framesize;
-   vid_format.fmt.pix.field = V4L2_FIELD_NONE;
-
-   if (v4l2_ioctl(output, VIDIOC_S_FMT, &vid_format) < 0) {
-      std::cerr << "ERROR: Unable to set video format: " << strerror(errno) << "\n";
-      return 6;
-   }
-
 
    // prepare virtual background
-   Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}}; // green background
-   const std::string imageFile = params.get<String>("image");
+   cv::Mat bgImage{VID_HEIGHT, VID_WIDTH, CV_8UC3, {0,255,0}}; // green background
    if (imageFile.size()) {
       std::cerr << "Loading image: " << imageFile << "\n";
-      Size size = bgImage.size();
-      bgImage = imread(imageFile);
+      cv::Size size = bgImage.size();
+      bgImage = cv::imread(imageFile);
       if (bgImage.empty()) {
          std::cerr << "Unable to read image from " << imageFile << "\n";
          return 10;
       }
-      resize(bgImage, bgImage, size, 0, 0, INTER_LINEAR);
+      cv::resize(bgImage, bgImage, size, 0, 0, cv::INTER_LINEAR);
    }
-   std::vector<Mat> frameChannels, bgImageChannels0, bgImageChannels;
 
-   bgImage.convertTo(bgImage, CV_32FC3, 1.0/255);
-   split(bgImage, bgImageChannels0);
-   split(bgImage, bgImageChannels);
+   g_a1 = 4.0;
+   g_a2 = 6.2;
 
-   Mat src, front, back;
-   Mat alpha = Mat::zeros(sz, CV_32F);
+   const size_t linesize = VID_WIDTH * 3;
+   const size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
+
 
    struct timeval tv{0, 0};
    gettimeofday(&tv, NULL);
    long sec = tv.tv_sec;
+
    unsigned long frames = 0;
+   char frame[framesize];
 
-#ifdef CALIBRATE
-   namedWindow("cvcam");
-   setMouseCallback("cvcam", mouseCallback);
-#endif
-
-   for (int key = 0; key != 27 /* ESC */; key = waitKey(10)) {
-      Mat frame;
-      cam >> frame;
-      if (frame.empty()) {
+   bool quit = false;
+   while(!quit) {
+      int r = v4l2_read(input, frame, framesize);
+      if (r < 0) {
          std::cerr << "Empty frame.\n";
+         quit = true;
          break;
       }
       ++frames;
 
-      frame.convertTo(frame, CV_32F, 1.0/255);
-      split(frame, frameChannels);
+      for (int i = 0; i < framesize-2; i += 3) {
+         float r = static_cast<unsigned char>(frame[i]) / 255.0,
+               g = static_cast<unsigned char>(frame[i+1]) / 255.0,
+               b = static_cast<unsigned char>(frame[i+2]) / 255.0;
 
-      //alpha = Scalar::all(1.0) - g_a1 * (frameChannels[1] - g_a2 * frameChannels[0]);
-      alpha = 1.0 + g_a1 * (frameChannels[0] + frameChannels[2]) - g_a2 * frameChannels[1];
-      threshold(alpha, alpha, 1, 1, THRESH_TRUNC);
-      threshold(alpha, alpha, 0, 0, THRESH_TOZERO);
-      multiply(alpha, alpha, alpha);
+         //alpha = Scalar::all(1.0) - g_a1 * (frameChannels[1] - g_a2 * frameChannels[0]);
+         float alpha = 1.0 + g_a1 * (r + b) - g_a2 * g;
 
-      for (int i=0; i < 3; ++i) {
-         multiply(alpha, frameChannels[i], frameChannels[i]);
-         multiply(1.0 - alpha, bgImageChannels0[i], bgImageChannels[i]);  
+         if (alpha > 1.0) alpha = 1.0;
+         else if (alpha < 0.0) alpha = 0.0;
+
+         alpha *= alpha;
+         const float Ialpha = 1.0 - alpha;
+         alpha *= 255.0;
+
+         frame[i] = r * alpha + Ialpha * bgImage.data[i+2]; // cv::Mat uses BGR format
+         frame[i+1] = g * alpha + Ialpha * bgImage.data[i+1];
+         frame[i+2] = b * alpha + Ialpha * bgImage.data[i];
       }
-      merge(frameChannels, front);
-      merge(bgImageChannels, back);
-      frame = front + back;
-      frame.convertTo(frame, CV_8UC3, 255);
-
-      imshow("cvcam", frame);
 
       //output << frame;
-      size_t written = v4l2_write(output, frame.data, framesize);
+      size_t written = v4l2_write(output, frame, framesize);
       if (written < 0) {
          close(output);
          std::cerr << "ERROR: Could not write to output device: " << strerror(errno) << "\n";
