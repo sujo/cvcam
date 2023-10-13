@@ -157,6 +157,9 @@ main(int argc, char *argv[]) {
          const float Ialpha = 1.0 - alpha;
          alpha *= 255.0;
 
+         // remove green borders
+         g = std::min(g, std::max(r, b));
+
          frame[i] = r * alpha + Ialpha * bgImage.data[i+2]; // cv::Mat uses BGR format
          frame[i+1] = g * alpha + Ialpha * bgImage.data[i+1];
          frame[i+2] = b * alpha + Ialpha * bgImage.data[i];
