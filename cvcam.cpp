@@ -161,6 +161,12 @@ main(int argc, char *argv[]) {
          // very dark pixels belong to the foreground (e.g. hair)
          if (g < 0.25) {
            alpha = 1.0;
+           float g_max = std::max(r, b);
+           if (g > g_max) {
+             float med = (g + g_max) / 2;
+             g = med;
+             r = med;
+           }
          } else {
             // remove green borders
             g = std::min(g, std::max(r, b));
