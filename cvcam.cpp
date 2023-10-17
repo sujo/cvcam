@@ -119,7 +119,7 @@ main(int argc, char *argv[]) {
       cv::resize(bgImage, bgImage, size, 0, 0, cv::INTER_LINEAR);
    }
 
-   g_a1 = 4.0;
+   g_a1 = 4.9;
    g_a2 = 6.2;
 
    constexpr size_t linesize = VID_WIDTH * 3;
@@ -133,12 +133,6 @@ main(int argc, char *argv[]) {
    unsigned long frames = 0;
    unsigned char *frame = new unsigned char[framesize];
    std::unique_ptr<unsigned char> frame_p(frame);
-   constexpr unsigned long pixels = VID_WIDTH * VID_HEIGHT;
-   float* alpha_prev = new float[pixels];
-   std::unique_ptr<float> alpha_prev_p(alpha_prev);
-   for (int p = 0; p < pixels; ++p) {
-     alpha_prev[p] = 0.0;
-   }
 
    bool quit = false;
    while(!quit) {
@@ -161,15 +155,19 @@ main(int argc, char *argv[]) {
          if (alpha > 1.0) alpha = 1.0;
          else if (alpha < 0.0) alpha = 0.0;
 
-         // Use weight to change the alpha value from its previous value.
-         alpha = (alpha + alpha_prev[p]) / 2;
+         alpha *= alpha;
+         alpha *= alpha;
 
-         alpha_prev[p] = alpha; 
+         // very dark pixels belong to the foreground (e.g. hair)
+         if (g < 0.25) {
+           alpha = 1.0;
+         } else {
+            // remove green borders
+            g = std::min(g, std::max(r, b));
+         }
+
          const float Ialpha = 1.0 - alpha;
          alpha *= 255.0;
-
-         // remove green borders
-         g = std::min(g, std::max(r, b));
 
          frame[i] = r * alpha + Ialpha * bgImage.data[i+2]; // cv::Mat uses BGR format
          frame[i+1] = g * alpha + Ialpha * bgImage.data[i+1];
