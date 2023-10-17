@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#include <memory>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -11,8 +12,8 @@
 #include <libv4l2.h>
 #include <opencv2/opencv.hpp>
 
-#define VID_WIDTH  1280
-#define VID_HEIGHT 720
+#define VID_WIDTH  1920
+#define VID_HEIGHT 1080
 
 float g_a1, g_a2;
 
@@ -59,16 +60,16 @@ main(int argc, char *argv[]) {
 
    const char* param_spec =
       "{ help h         |             | Print usage }"
-      "{ input          | /dev/video1 | Video device for primary video stream input }"
+      "{ input          | /dev/video5 | Video device for primary video stream input }"
       "{ output         | /dev/video8 | Video device for the output stream. Can be created with the v4l2loopback kernel module. }"
-      "{ image          | /home/spike/myicarus.jpg   | Image that replaces the background removed from the input stream }"
+      "{ image          | image   | Image that replaces the background removed from the input stream }"
       "{ rb             | 4.0         | weight for blue-green difference on alpha }"
       "{ g              | 6.2         | blue-green difference scale }"
       ;
 
-   const std::string imageFile = "/home/spike/myicarus.jpg";
+   const std::string imageFile = "image";
 
-   const std::string inputFile = "/dev/video1";
+   const std::string inputFile = "/dev/video0";
    if (inputFile.size() == 0) {
       std::cerr << "Missing parameter: input device\n";
       return 1;
@@ -121,8 +122,8 @@ main(int argc, char *argv[]) {
    g_a1 = 4.0;
    g_a2 = 6.2;
 
-   const size_t linesize = VID_WIDTH * 3;
-   const size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
+   constexpr size_t linesize = VID_WIDTH * 3;
+   constexpr size_t framesize = VID_WIDTH * VID_HEIGHT * 3;
 
 
    struct timeval tv{0, 0};
@@ -130,7 +131,14 @@ main(int argc, char *argv[]) {
    long sec = tv.tv_sec;
 
    unsigned long frames = 0;
-   char frame[framesize];
+   unsigned char *frame = new unsigned char[framesize];
+   std::unique_ptr<unsigned char> frame_p(frame);
+   constexpr unsigned long pixels = VID_WIDTH * VID_HEIGHT;
+   float* alpha_prev = new float[pixels];
+   std::unique_ptr<float> alpha_prev_p(alpha_prev);
+   for (int p = 0; p < pixels; ++p) {
+     alpha_prev[p] = 0.0;
+   }
 
    bool quit = false;
    while(!quit) {
@@ -142,7 +150,7 @@ main(int argc, char *argv[]) {
       }
       ++frames;
 
-      for (int i = 0; i < framesize-2; i += 3) {
+      for (unsigned int i = 0, p = 0; i < framesize-2; i += 3, ++p) {
          float r = static_cast<unsigned char>(frame[i]) / 255.0,
                g = static_cast<unsigned char>(frame[i+1]) / 255.0,
                b = static_cast<unsigned char>(frame[i+2]) / 255.0;
@@ -153,7 +161,10 @@ main(int argc, char *argv[]) {
          if (alpha > 1.0) alpha = 1.0;
          else if (alpha < 0.0) alpha = 0.0;
 
-         alpha *= alpha;
+         // Use weight to change the alpha value from its previous value.
+         alpha = (alpha + alpha_prev[p]) / 2;
+
+         alpha_prev[p] = alpha; 
          const float Ialpha = 1.0 - alpha;
          alpha *= 255.0;
 
